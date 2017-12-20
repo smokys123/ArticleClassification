@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+import os
+import random
+import numpy as np
+from tqdm import tqdm
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
+import read_data
+import DocumentClassifier_cnn_hier as m
+
+
+def save_param():
+    raise NotImplementedError()
+
+
+def train(config, dataset):
+    wordvector_dim = 300
+    word_hdim = 50
+    sen_hdim = 10
+
+    # data preprocessing
+    # __import__('pdb').set_trace()
+    (train_dataset, test_dataset) = read_data.read_bbc(config)
+
+    train_dataset._word_to_idx()
+    train_dataset.padding_doc()
+    test_dataset._word_to_idx()
+    test_dataset.padding_doc()
+
+    model = m.GRU_CNN(config, wordvector_dim, word_hdim, sen_hdim)
+    print("model is loaded!!")
+    """
+    #parameter save
+    current_path = os.path.dirname(os.path.abspath(__file__))
+    param_path = os.path.join(current_path,'model','param','DocumentClassifier_HierarchyAtt')
+    state_dict = torch.load(param_path)
+    own_state = model.state_dict()
+    pretrained_param = ['embedding.weight','word_bi_GRU.weight_ih_l0','word_bi_GRU.weight_hh_l0','word_bi_GRU.bias_ih_l0','word_bi_GRU.bias_hh_l0','word_bi_GRU.weight_ih_l0_reverse','word_bi_GRU.weight_hh_l0_reverse','word_bi_GRU.bias_hh_l0_reverse','word_bi_GRU.blas_ih_l0_reverse']
+    for name, param in state_dict.items():
+    if name not in pretrained_param: continue
+    own_state[name].copy_(param)
+    print("PARAMETER LOADED {:20s} {:20s}".format('',name))
+    """
+
+    #embedding
+    current_path = os.path.dirname(os.path.abspath(__file__))
+    data_path = os.path.join(current_path, 'dataset', 'BBC')
+    word2vec_path = os.path.join(data_path,'word2vec.npy')
+    word2vec_dict = np.load(word2vec_path)
+
+    #pretrained_weight = np.empty((doc_dataset.nvoc, wordvector_dim))
+    pretrained_weight = np.empty((21582, wordvector_dim))
+    pretrained_weight[0] = np.zeros((wordvector_dim)).astype(np.float32)
+    pretrained_weight[1:] = word2vec_dict.astype(np.float32)
+
+    #embedding = nn.Embedding(doc_dataset.nvoc,300)
+    model.embedding.weight.data.copy_(torch.from_numpy(pretrained_weight.astype(np.float32)))
+    print("loading word2vec is done!")
+
+    #doc_dataset =  list of tuple (class, number of sentences, [number of words], [w1, w2, ... ])
+    #loss_function = nn.NLLLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.01)
+    for epoch in range(20):
+        random.shuffle(train_dataset.data)
+        train_loss = 0
+        train_accu=0
+        for target, num_sen, num_word, data in tqdm(train_dataset.data):
+
+            model.zero_grad()
+
+            #make target idx
+            a = train_dataset.class_to_idx[target]
+            target_idx = train_dataset.class_to_idx[target]
+            target_idx = Variable(torch.LongTensor([target_idx]))
+            len_sen = len(data[0])
+
+            #forward pass
+            scores = model(data,num_sen,len_sen,num_word) # scores = (1,5)
+            max_= torch.max(scores,1)
+
+            if a == max_[1].data[0]:
+                train_accu += 1
+
+            #compute loss, gradient, update params
+            loss = F.cross_entropy(scores,target_idx)
+            train_loss += loss
+            loss.backward()
+            optimizer.step()
+
+        print("Train dataset -- Epoch : {}, LOSS : {}".format(epoch, train_loss/1000))
+        print("Train dataset -- Accuracy : {}".format(train_accu/10))
+
+        #eval
+        test_accu = 0
+        test_loss = 0
+        for target,num_sen,num_word,data in tqdm(test_dataset.data):
+
+            a = test_dataset.class_to_idx[target]
+            target_idx = test_dataset.class_to_idx[target]
+            target_idx = Variable(torch.LongTensor([target_idx]))
+
+            scores = model(data,num_sen,len_sen,num_word)
+            max_= torch.max(scores,1)
+
+            if a == max_[1].data[0]:
+                test_accu += 1
+
+            loss = F.cross_entropy(scores,target_idx)
+            test_loss += loss
+        print("Test dataset -- LOSS : {}".format(test_loss/200))
+        print("Test dataset -- Accuracy : {}".format(test_accu/2))
+
+
+
+
